@@ -1,10 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import {
+  createWikiApplyTool,
+  createWikiGetTool,
+  createWikiSearchTool,
+  createWikiStatusTool,
+} from "./tool.js";
 
-const { syncBridgeMock, syncUnsafeLocalMock, refreshIndexesMock } = vi.hoisted(() => ({
+const {
+  syncBridgeMock,
+  syncUnsafeLocalMock,
+  refreshIndexesMock,
+  resolveStatusMock,
+  renderStatusMock,
+  searchWikiMock,
+  getWikiMock,
+  normalizeMutationMock,
+  applyMutationMock,
+} = vi.hoisted(() => ({
   syncBridgeMock: vi.fn(),
   syncUnsafeLocalMock: vi.fn(),
   refreshIndexesMock: vi.fn(),
+  resolveStatusMock: vi.fn(),
+  renderStatusMock: vi.fn(),
+  searchWikiMock: vi.fn(),
+  getWikiMock: vi.fn(),
+  normalizeMutationMock: vi.fn(),
+  applyMutationMock: vi.fn(),
 }));
 
 vi.mock("./bridge.js", () => ({
@@ -17,6 +39,22 @@ vi.mock("./unsafe-local.js", () => ({
 
 vi.mock("./compile.js", () => ({
   refreshMemoryWikiIndexesAfterImport: refreshIndexesMock,
+}));
+
+vi.mock("./status.js", () => ({
+  resolveMemoryWikiStatus: resolveStatusMock,
+  renderMemoryWikiStatus: renderStatusMock,
+}));
+
+vi.mock("./query.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./query.js")>()),
+  searchMemoryWiki: searchWikiMock,
+  getMemoryWikiPage: getWikiMock,
+}));
+
+vi.mock("./apply.js", () => ({
+  normalizeMemoryWikiMutationInput: normalizeMutationMock,
+  applyMemoryWikiMutation: applyMutationMock,
 }));
 
 const bridgeResult = {
@@ -43,6 +81,23 @@ describe("syncMemoryWikiImportedSources", () => {
       refreshed: true,
       reason: "import-changed",
       compile: { updatedFiles: ["index.md", "sources/index.md"] },
+    });
+    resolveStatusMock.mockReset();
+    renderStatusMock.mockReset();
+    searchWikiMock.mockReset();
+    getWikiMock.mockReset();
+    normalizeMutationMock.mockReset();
+    applyMutationMock.mockReset();
+    resolveStatusMock.mockResolvedValue({ vaultMode: "bridge" });
+    renderStatusMock.mockReturnValue("status ok");
+    searchWikiMock.mockResolvedValue([]);
+    getWikiMock.mockResolvedValue({ content: "page" });
+    normalizeMutationMock.mockReturnValue({ op: "create_synthesis", title: "T", body: "B" });
+    applyMutationMock.mockResolvedValue({
+      changed: true,
+      pagePath: "Syntheses/T.md",
+      operation: "create_synthesis",
+      compile: { updatedFiles: [] },
     });
   });
 
@@ -135,5 +190,56 @@ describe("syncMemoryWikiImportedSources", () => {
       indexRefreshReason: "import-changed",
       indexUpdatedFiles: ["index.md", "sources/index.md"],
     });
+  });
+});
+
+describe("memory wiki tool imported-source sync gating", () => {
+  beforeEach(() => {
+    syncBridgeMock.mockReset();
+    syncUnsafeLocalMock.mockReset();
+    refreshIndexesMock.mockReset();
+    syncBridgeMock.mockResolvedValue(bridgeResult);
+    syncUnsafeLocalMock.mockResolvedValue({
+      ...bridgeResult,
+      workspaces: 0,
+    });
+    refreshIndexesMock.mockResolvedValue({
+      refreshed: true,
+      reason: "import-changed",
+      compile: { updatedFiles: ["index.md", "sources/index.md"] },
+    });
+  });
+
+  const config = {
+    vaultMode: "bridge",
+    ingest: { importedSourceSyncMinIntervalMs: 60_000 },
+    search: { backend: "local", corpus: "wiki" },
+  } as Parameters<typeof createWikiStatusTool>[0];
+
+  it("two rapid wiki_status calls with forceSync only trigger one sync", async () => {
+    const tool = createWikiStatusTool(config);
+
+    await tool.execute("call-1", { forceSync: true });
+    await tool.execute("call-2", { forceSync: true });
+
+    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wiki_search and wiki_get without forceSync trigger zero syncs", async () => {
+    const searchTool = createWikiSearchTool(config);
+    const getTool = createWikiGetTool(config);
+
+    await searchTool.execute("call-1", { query: "alpha" });
+    await getTool.execute("call-2", { lookup: "alpha" });
+
+    expect(syncBridgeMock).not.toHaveBeenCalled();
+  });
+
+  it("wiki_apply still triggers a sync", async () => {
+    const tool = createWikiApplyTool(config);
+
+    await tool.execute("call-1", { op: "create_synthesis", title: "T", body: "B" });
+
+    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
   });
 });

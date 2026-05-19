@@ -41,6 +41,7 @@ export type MemoryWikiPluginConfig = {
     autoCompile?: boolean;
     maxConcurrentJobs?: number;
     allowUrlIngest?: boolean;
+    importedSourceSyncMinIntervalMs?: number;
   };
   search?: {
     backend?: WikiSearchBackend;
@@ -84,6 +85,7 @@ export type ResolvedMemoryWikiConfig = {
     autoCompile: boolean;
     maxConcurrentJobs: number;
     allowUrlIngest: boolean;
+    importedSourceSyncMinIntervalMs: number;
   };
   search: {
     backend: WikiSearchBackend;
@@ -141,6 +143,7 @@ const MemoryWikiConfigSource = z.strictObject({
       autoCompile: z.boolean().optional(),
       maxConcurrentJobs: z.number().int().min(1).optional(),
       allowUrlIngest: z.boolean().optional(),
+      importedSourceSyncMinIntervalMs: z.number().int().min(0).optional(),
     })
     .optional(),
   search: z
@@ -236,6 +239,7 @@ export function resolveMemoryWikiConfig(
       autoCompile: safeConfig.ingest?.autoCompile ?? true,
       maxConcurrentJobs: safeConfig.ingest?.maxConcurrentJobs ?? 1,
       allowUrlIngest: safeConfig.ingest?.allowUrlIngest ?? true,
+      importedSourceSyncMinIntervalMs: safeConfig.ingest?.importedSourceSyncMinIntervalMs ?? 60_000,
     },
     search: {
       backend: safeConfig.search?.backend ?? DEFAULT_WIKI_SEARCH_BACKEND,

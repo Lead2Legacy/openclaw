@@ -69,6 +69,17 @@ function readNumberParam(params: Record<string, unknown>, key: string): number |
   return undefined;
 }
 
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
+  const value = params[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() === "true";
+  }
+  return false;
+}
+
 function readEnumParam<T extends string>(
   params: Record<string, unknown>,
   key: string,
@@ -99,11 +110,22 @@ function resolveGatewayAgentId(
   );
 }
 
+const lastImportedSourceSyncAtByConfig = new WeakMap<ResolvedMemoryWikiConfig, number>();
+
 async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  options: { force?: boolean } = {},
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  const now = Date.now();
+  const minIntervalMs = config.ingest.importedSourceSyncMinIntervalMs;
+  const lastSyncAt = lastImportedSourceSyncAtByConfig.get(config) ?? 0;
+  if (!options.force && now - lastSyncAt < minIntervalMs) {
+    return undefined;
+  }
+  const result = await syncMemoryWikiImportedSources({ config, appConfig });
+  lastImportedSourceSyncAtByConfig.set(config, now);
+  return result;
 }
 
 export function registerMemoryWikiGatewayMethods(params: {
@@ -115,9 +137,11 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "wiki.status",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        if (readBooleanParam(requestParams, "forceSync")) {
+          await syncImportedSourcesIfNeeded(config, appConfig);
+        }
         respond(
           true,
           await resolveMemoryWikiStatus(config, {
@@ -202,7 +226,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.compile",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        await syncImportedSourcesIfNeeded(config, appConfig, { force: true });
         respond(true, await compileMemoryWikiVault(config));
       } catch (error) {
         respondError(respond, error);
@@ -236,7 +260,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.lint",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        await syncImportedSourcesIfNeeded(config, appConfig, { force: true });
         respond(true, await lintMemoryWikiVault(config));
       } catch (error) {
         respondError(respond, error);
@@ -285,7 +309,9 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.search",
     async ({ params: requestParams, respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        if (readBooleanParam(requestParams, "forceSync")) {
+          await syncImportedSourcesIfNeeded(config, appConfig);
+        }
         const query = readStringParam(requestParams, "query", { required: true });
         const maxResults = readNumberParam(requestParams, "maxResults");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
@@ -316,7 +342,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.apply",
     async ({ params: requestParams, respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        await syncImportedSourcesIfNeeded(config, appConfig, { force: true });
         respond(
           true,
           await applyMemoryWikiMutation({
@@ -335,7 +361,9 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.get",
     async ({ params: requestParams, respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
+        if (readBooleanParam(requestParams, "forceSync")) {
+          await syncImportedSourcesIfNeeded(config, appConfig);
+        }
         const lookup = readStringParam(requestParams, "lookup", { required: true });
         const fromLine = readNumberParam(requestParams, "fromLine");
         const lineCount = readNumberParam(requestParams, "lineCount");
