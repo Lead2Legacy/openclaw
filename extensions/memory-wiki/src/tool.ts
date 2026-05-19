@@ -11,7 +11,10 @@ import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
-const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
+const ForceSyncSchema = {
+  forceSync: Type.Optional(Type.Boolean()),
+};
+const WikiStatusSchema = Type.Object(ForceSyncSchema, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
@@ -25,6 +28,7 @@ const WikiSearchSchema = Type.Object(
     backend: Type.Optional(WikiSearchBackendSchema),
     corpus: Type.Optional(WikiSearchCorpusSchema),
     mode: Type.Optional(WikiSearchModeSchema),
+    ...ForceSyncSchema,
   },
   { additionalProperties: false },
 );
@@ -35,6 +39,7 @@ const WikiGetSchema = Type.Object(
     lineCount: Type.Optional(Type.Number({ minimum: 1 })),
     backend: Type.Optional(WikiSearchBackendSchema),
     corpus: Type.Optional(WikiSearchCorpusSchema),
+    ...ForceSyncSchema,
   },
   { additionalProperties: false },
 );
@@ -79,11 +84,22 @@ const WikiApplySchema = Type.Object(
   { additionalProperties: false },
 );
 
+const lastImportedSourceSyncAtByConfig = new WeakMap<ResolvedMemoryWikiConfig, number>();
+
 async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
+  options: { force?: boolean } = {},
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  const now = Date.now();
+  const minIntervalMs = config.ingest.importedSourceSyncMinIntervalMs;
+  const lastSyncAt = lastImportedSourceSyncAtByConfig.get(config) ?? 0;
+  if (!options.force && now - lastSyncAt < minIntervalMs) {
+    return undefined;
+  }
+  const result = await syncMemoryWikiImportedSources({ config, appConfig });
+  lastImportedSourceSyncAtByConfig.set(config, now);
+  return result;
 }
 
 type WikiToolMemoryContext = {
@@ -102,8 +118,11 @@ export function createWikiStatusTool(
     description:
       "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
     parameters: WikiStatusSchema,
-    execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig);
+    execute: async (_toolCallId, rawParams) => {
+      const params = rawParams as { forceSync?: boolean } | undefined;
+      if (params?.forceSync) {
+        await syncImportedSourcesIfNeeded(config, appConfig);
+      }
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
       });
@@ -133,8 +152,11 @@ export function createWikiSearchTool(
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
         mode?: (typeof WIKI_SEARCH_MODES)[number];
+        forceSync?: boolean;
       };
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      if (params.forceSync) {
+        await syncImportedSourcesIfNeeded(config, appConfig);
+      }
       const results = await searchMemoryWiki({
         config,
         appConfig,
@@ -175,7 +197,7 @@ export function createWikiLintTool(
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
     parameters: WikiLintSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      await syncImportedSourcesIfNeeded(config, appConfig, { force: true });
       const result = await lintMemoryWikiVault(config);
       const contradictions = result.issuesByCategory.contradictions.length;
       const openQuestions = result.issuesByCategory["open-questions"].length;
@@ -212,7 +234,7 @@ export function createWikiApplyTool(
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      await syncImportedSourcesIfNeeded(config, appConfig, { force: true });
       const result = await applyMemoryWikiMutation({ config, mutation });
       const action = result.changed ? "Updated" : "No changes for";
       const compileSummary =
@@ -250,8 +272,11 @@ export function createWikiGetTool(
         lineCount?: number;
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+        forceSync?: boolean;
       };
-      await syncImportedSourcesIfNeeded(config, appConfig);
+      if (params.forceSync) {
+        await syncImportedSourcesIfNeeded(config, appConfig);
+      }
       const result = await getMemoryWikiPage({
         config,
         appConfig,

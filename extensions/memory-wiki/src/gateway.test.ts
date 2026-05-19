@@ -198,7 +198,7 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
       appConfig: undefined,
     });
